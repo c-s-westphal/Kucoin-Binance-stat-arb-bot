@@ -1,0 +1,289 @@
+from kucoin.client import Margin
+from kucoin.client import Trade
+from kucoin_2.client import Client
+api_key = #####
+api_secret = #####
+api_passphrase = #####
+client_k = Client(api_key, api_secret, api_passphrase)
+margin_k = Margin(api_key, api_secret, api_passphrase)
+trade_k = Trade(api_key, api_secret, api_passphrase)
+from binance.client import Client
+from binance.enums import *
+import datetime
+import pandas as pd
+import time
+import math
+from datetime import datetime, timedelta
+client_b = Client(#####, #####,{"verify": False, "timeout": 200000})
+def roundup(x):
+    return int(math.floor(x / 10.0)) * 10
+def round_decimals_down(number:float, decimals:int):
+    """
+    Returns a value rounded down to a specific number of decimal places.
+    """
+    if not isinstance(decimals, int):
+        raise TypeError("decimal places must be an integer")
+    elif decimals < 0:
+        raise ValueError("decimal places has to be 0 or more")
+    elif decimals == 0:
+        return math.floor(number)
+
+    factor = 10 ** decimals
+    return math.floor(number * factor) / factor
+def price_bid_b(symbol):
+    cross = symbol +'BTC'    
+    avg_price = client_b.get_ticker(symbol=cross)
+    price_now = float(avg_price['bidPrice'])
+    return price_now
+
+def price_ask_b(symbol):
+    cross = symbol +'BTC'    
+    avg_price = client_b.get_ticker(symbol=cross)
+    price_now = float(avg_price['askPrice'])
+    return price_now
+
+def price_bid_k(symbol):
+    cross = symbol +'-BTC'    
+    avg_price = client_k.get_ticker(symbol=cross)
+    price_now = float(avg_price['bestBid'])
+    return price_now
+
+def price_ask_k(symbol):
+    cross = symbol +'-BTC'    
+    avg_price = client_k.get_ticker(symbol=cross)
+    price_now = float(avg_price['bestAsk'])
+    return price_now
+
+
+def open_pos_signaller(symbol):
+    askk = price_ask_k(symbol)
+    bidk = price_ask_k(symbol)
+    askb = price_ask_b(symbol)
+    bidb = price_ask_b(symbol)
+    a = b = c = d = 'No'
+    if bidk > askb*1.006:
+        a = 'bidk > askb'
+    if bidb > askk*1.006:
+        b = 'bidb > askk'
+    if askb*1.006 < bidk:
+        c = 'askb < bidk'
+    if askk*1.006 < bidb:
+        d = 'askk < bidb'
+    return a, b, c, d
+
+def open_pos_converter(symbol):
+    a, b, c, d = open_pos_signaller(symbol)
+    if a == 'bidk > askb' and c == 'askb < bidk':
+        result = 'bb_ks'
+    if b == 'bidb > askk' and d == 'askk < bidb':
+        result = 'bs_kb'
+    else:
+        result = 'No'
+        
+    return result
+
+def close_pos_signaller(symbol):
+    askk = price_ask_k(symbol)
+    bidk = price_ask_k(symbol)
+    askb = price_ask_b(symbol)
+    bidb = price_ask_b(symbol)
+    a = b = c = d = 'No'
+    if bidk <= askb:
+        a = 'bidk <= askb'
+    if bidb <= askk:
+        b = 'bidb <= askk'
+    if askb >= bidk:
+        c = 'askb >= bidk'
+    if askk >= bidb:
+        d = 'askk >= bidb'
+    return a, b, c, d
+
+def close_pos_converter(symbol):
+    a, b, c, d = close_pos_signaller(symbol)
+    if a == 'bidk <= askb' and c == 'askb >= bidk':
+        result = 'bs_kb'
+    elif b == 'bidb <= askk' and d == 'askk >= bidb':
+        result = 'bb_ks'
+    else:
+        result = 'No'
+        
+    return result
+def available_symbol_b(symbol):
+    acct = client_b.get_margin_account()
+    for i in range(len(acct['userAssets'])):
+        if acct['userAssets'][i]['asset'] == symbol:
+            free = float(acct['userAssets'][i]['free'])
+            borrowed = float(acct['userAssets'][i]['borrowed'])
+    return free, borrowed
+def available_symbol_k(symbol):
+    accounts = client_k.get_accounts()
+    for i in range(len(accounts)):
+        if accounts[i]['currency'] == symbol and float(accounts[i]['balance']) > 0:
+            free = float(accounts[i]['balance'])
+        
+    return free
+def desirable_quant_BTC_b(symbol):
+    btc, null = available_symbol_b('BTC')
+    avg_price = price_ask_b(symbol)
+    avg_price = float(avg_price)
+    desired = btc/avg_price
+    return desired
+def desirable_quant_BTC_k(symbol):
+    btc = available_symbol_k('BTC')
+    avg_price = price_ask_k(symbol)
+    avg_price = float(avg_price)
+    desired = btc/avg_price
+    return desired
+def desirable_quant_other_k(symbol):
+    other = available_symbol_k(symbol)
+    avg_price = price_ask_k(symbol)
+    avg_price = float(avg_price)
+    desired = other*avg_price
+    return desired
+def buyable_quant_b(desired, symbol):
+    cross = symbol + 'BTC'
+    acct = client_b.get_margin_account()
+    for i in range(len(acct['userAssets'])):
+        if  acct['userAssets'][i]['asset'] == symbol:
+                info = client_b.get_symbol_info(symbol=cross)
+                minimum = float(info['filters'][2]['minQty'])
+                stepsize = float(info['filters'][2]['stepSize'])
+                val = desired/stepsize
+                quantity_bs = (minimum*int(val))
+                while quantity_bs < desired:
+                    quantity_bs = quantity_bs + minimum
+            
+                while quantity_bs > desired:
+                    quantity_bs = quantity_bs - minimum
+                    
+    return float(quantity_bs)
+def step_size_to_precision_BTC(symbol):
+    cross = symbol + '-BTC'
+    k = client_k.get_symbols()
+    for i in range(len(k)):
+        if k[i]['symbol'] == cross:
+            ss = k[i]['priceIncrement']
+    return ss.find('1')-1
+def step_size_to_precision_USDT(symbol):
+    cross = symbol + '-USDT'
+    k = client_k.get_symbols()
+    for i in range(len(k)):
+        if k[i]['symbol'] == cross:
+            ss = k[i]['priceIncrement']
+    return ss.find('1')-1
+
+def format_value_BTC(symbol, val):
+    precision = step_size_to_precision_BTC(symbol)
+    rounded = round_decimals_down(val, precision)
+    return rounded
+def format_value_USDT(symbol, val):
+    precision = step_size_to_precision_USDT(symbol)
+    rounded = round_decimals_down(val, precision)
+    return rounded
+def protect_limits(desired):
+    desired = desired - (desired*0.002)
+    return desired
+def available_margin_k(symbol):
+    marg = margin_k.get_margin_account()
+    for i in range(len(marg)):
+        if marg['accounts'][i]['currency'] == symbol:
+            return float(marg['accounts'][i]['availableBalance'])
+def buy_b(symbol):
+    
+    cross = symbol + 'BTC'
+    
+    desired = desirable_quant_BTC_b(symbol)
+    
+    desired = protect_limits(desired)
+    
+    quant = buyable_quant_b(desired, symbol)
+    client_b.create_margin_order(symbol=cross, side = SIDE_BUY, type = 'MARKET',  quantity= quant )
+                          
+    return  
+def buy_k(symbol):
+    cross = symbol + '-BTC'
+    val = desirable_quant_BTC_k(symbol)
+    quant = format_value_USDT(symbol, val)
+    client_k.create_market_order(cross, Client.SIDE_BUY, size=quant)
+    return 
+def sell_b(symbol):
+    cross = symbol + 'BTC'
+    desired, null = available_symbol_b(symbol)
+    quant = buyable_quant_b(desired, symbol)    
+    client_b.create_margin_order(symbol=cross, side = SIDE_SELL, type = 'MARKET',  quantity= quant )
+                
+    return 
+def sell_k(symbol):
+    cross = symbol + '-BTC'
+    val = desirable_quant_other_k(symbol)
+    quant = format_value_BTC(symbol, val)
+    print(quant)
+    client_k.create_market_order(cross, Client.SIDE_SELL, funds=quant)           
+    return 
+def short_b(symbol):
+    cross = symbol + 'BTC'
+    desired = desirable_quant_BTC_b(symbol)
+    quant = buyable_quant_b(desired, symbol)
+    client_b.create_margin_loan(asset=symbol, amount=quant)        
+    client_b.create_margin_order(symbol=cross,  side = SIDE_SELL, type = 'MARKET',  quantity=(quant))
+    return
+def short_k(symbol):
+    cross = symbol + '-BTC'
+    val = desirable_quant_BTC_k(symbol)
+    quant = format_value_USDT(symbol, val)
+    quant = roundup(quant)
+    ordid = margin_k.create_borrow_order(symbol, 'FOK', quant)
+    oid = ordid['orderId']
+    while float(available_margin_k(symbol)) < float(quant):
+        print('waiting for transfer')
+        time.sleep(1)
+    if float(available_margin_k(symbol)) >= float(quant):
+        time.sleep(2)
+        trade_k.create_market_margin_order(cross, 'sell', funds = quant)
+    return oid, quant
+def auto_repay_k(symbol, quant):
+    cross = symbol + '-BTC'
+    trade_k.create_market_margin_order(cross, 'buy', size = quant)
+    margin_k.click_to_repayment(symbol, 'RECENTLY_EXPIRE_FIRST', size = quant)
+    return
+def auto_repay_b(symbol):
+    cross = symbol + 'BTC'
+    null, desired = available_symbol_b(symbol)
+    quant = buyable_quant_b(desired, symbol)
+    client_b.create_margin_order(symbol=cross,  side = SIDE_BUY, type = 'MARKET',  sideEffectType = 'AUTO_REPAY', quantity=(quant))
+    return
+def bot(symbol):
+    if open_pos_converter(symbol) == 'No':
+        print('No arbitrage oppurtunities available.')
+    if open_pos_converter(symbol) == 'bb_ks':
+        buy_k(symbol)
+        short_b(symbol)
+        print('Arbitrage oppurtunity, shorted on Binance and bought on Kucoin')
+        while close_pos_converter(symbol) != 'bs_kb':
+            print('Holding poistion')
+            time.sleep(5)
+        if close_pos_converter(symbol) == 'bs_kb':
+            sell_k(symbol)
+            auto_repay_b(symbol)
+            print('position exited')
+    if open_pos_converter(symbol) == 'bs_kb':
+        oid, quant = short_k(symbol)
+        buy_b(symbol)
+        print('Arbitrage oppurtunity, sold on Kucoin and bought on Binance')
+        while close_pos_converter(symbol) != 'bb_ks':
+            print('Holding poistion')
+            time.sleep(5)
+        else:
+            sell_b(symbol)
+            auto_repay_k(symbol, quant)
+            print('position exited')
+    
+    return
+def symbols():
+    sym = [ 'LTC','TRX','XMR', 'XLM', 'XTZ', 'ZEC', 'EOS', 'BCH', 'ZIL', 'DASH', 'OMG', 'ZRX', 'BSV', 'IOST']
+    return sym
+
+
+    
+while 1==1:
+   (bot('TRX'))
